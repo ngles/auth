@@ -6,8 +6,4 @@ class AuthenticationServiceTest extends NGLAbstractAsyncTest {
   def fixture = new {
 
   }
-
-  "Authentication Service" must "return authentication true" in {
-
-  }
 }

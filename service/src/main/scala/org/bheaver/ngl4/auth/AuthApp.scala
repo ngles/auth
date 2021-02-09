@@ -1,42 +1,65 @@
 package org.bheaver.ngl4.auth
 
-import akka.http.scaladsl.server.{Directive, HttpApp, Route}
+import akka.actor.ActorSystem
+import akka.http.scaladsl.Http
+import akka.http.scaladsl.model.{ContentTypes, HttpEntity}
+import akka.http.scaladsl.server.Directives._
 import org.bheaver.ngl4.auth.authentication.AuthenticationServiceImpl
-import org.bheaver.ngl4.auth.authentication.model._
-import akka.http.scaladsl.settings.ServerSettings
-import com.google.inject.Guice
-import com.typesafe.config.ConfigFactory
 import spray.json.DefaultJsonProtocol._
+import org.bheaver.ngl4.auth.authentication.model._
+import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 
-class AuthApp {
-  val settings = ServerSettings(ConfigFactory.load).withDefaultHttpPort(80).withVerboseErrorMessages(true)
-  def start = WebApp.startServer("localhost", 8080, settings)
-}
+import scala.concurrent.Future
+import scala.io.StdIn
+import org.bheaver.ngl4.base.model
+import org.bheaver.ngl4.base.model.LibCode
+import org.bheaver.ngl4.base.constants.HttpHeaderNames._
+
 object AuthApp extends App {
-  val injector = Guice.createInjector(new AuthModule)
+  implicit val actorSystem = ActorSystem("authenticationAuthorizationApp")
 
-  injector.getInstance(classOf[AuthApp]).start
-}
+  implicit val executionContext = actorSystem.dispatcher
 
-object WebApp extends HttpApp {
-  implicit val itemFormat = jsonFormat2(AuthenticateResponse)
-  val authService = new AuthenticationServiceImpl
+  implicit val respFormat = jsonFormat7(AuthenticateResponse)
 
-  override protected def routes: Route =
-    concat {
+  val authenticationService = new AuthenticationServiceImpl
+
+  val route = {
+
       path("auth") {
-        get { ctx =>
-          val headers = ctx.request.headers
-          headers.foreach(header => {
-            println(header)
-          })
+        post {
+          headerValueByName(X_LIB_CODE.toString){
+            libId => {
+              println(s"libId ${libId}")
+              implicit val libCode = LibCode(libId)
 
-          ctx.complete {
-            "Received auth with libId "
+              formFields("patronId".as[String], "username".as[String], "password".as[String]){
+                (patronId, username, password) => {
+                  val authenticateRequest = AuthenticateRequest(patronId, username, password, null)
+
+                  val eventualResponse = authenticationService.authenticate(authenticateRequest)
+
+                  onSuccess(eventualResponse) {
+                    item => {
+                      complete(item)
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
-    }
 
+
+  }
+
+  private val eventualBinding: Future[Http.ServerBinding] = Http().newServerAt("localhost", 8080).bind(route)
+
+  println(s"Server online at http://localhost:8080/\nPress RETURN to stop...")
+  StdIn.readLine()
+
+  eventualBinding
+    .flatMap(_.unbind())
+    .onComplete(_ => actorSystem.terminate())
 }
-
